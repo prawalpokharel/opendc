@@ -92,3 +92,31 @@ public data class VCpuWeigherSpec(override val multiplier: Double = 1.0) : HostW
 @Serializable
 @SerialName("vgpu")
 public data class VGpuWeigherSpec(override val multiplier: Double = 1.0) : HostWeigherSpec
+
+/**
+ * Weighs hosts by the total criticality of the tasks they run. With a negative [multiplier] (the default), hosts that
+ * carry less critical work rank higher, which spreads critical tasks over the hosts.
+ *
+ * @property source Where the criticality of a task comes from.
+ * @property scoresPath The CSV file with a score per task id, when [source] is [CriticalitySourceSpec.SCORES].
+ * @property multiplier The weight applied to the criticality score.
+ */
+@Serializable
+@SerialName("criticality")
+public data class CriticalityWeigherSpec(
+    public val source: CriticalitySourceSpec = CriticalitySourceSpec.DESCENDANTS,
+    public val scoresPath: String? = null,
+    override val multiplier: Double = -1.0,
+) : HostWeigherSpec {
+    override fun validate(): List<ValidationIssue> = super.validate() + criticalityIssues(source, scoresPath)
+}
+
+/**
+ * Gives each host a random weight every time it is ranked, which spreads tasks at random. A baseline for comparing
+ * weighers.
+ *
+ * @property multiplier The weight applied to the random score.
+ */
+@Serializable
+@SerialName("random")
+public data class RandomWeigherSpec(override val multiplier: Double = 1.0) : HostWeigherSpec

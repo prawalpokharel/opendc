@@ -25,6 +25,8 @@ package org.opendc.sdk.runner.factory
 import org.opendc.sdk.model.scheduler.AllocationPolicySpec
 import org.opendc.sdk.model.scheduler.ComputeHostFilterSpec
 import org.opendc.sdk.model.scheduler.CoreRamWeigherSpec
+import org.opendc.sdk.model.scheduler.CriticalitySourceSpec
+import org.opendc.sdk.model.scheduler.CriticalityWeigherSpec
 import org.opendc.sdk.model.scheduler.DifferentHostFilterSpec
 import org.opendc.sdk.model.scheduler.FilterAllocationPolicySpec
 import org.opendc.sdk.model.scheduler.HostFilterSpec
@@ -34,6 +36,7 @@ import org.opendc.sdk.model.scheduler.InstanceCountWeigherSpec
 import org.opendc.sdk.model.scheduler.PrefabAllocationPolicySpec
 import org.opendc.sdk.model.scheduler.RamFilterSpec
 import org.opendc.sdk.model.scheduler.RamWeigherSpec
+import org.opendc.sdk.model.scheduler.RandomWeigherSpec
 import org.opendc.sdk.model.scheduler.SameHostFilterSpec
 import org.opendc.sdk.model.scheduler.TimeshiftSpec
 import org.opendc.sdk.model.scheduler.VCpuCapacityFilterSpec
@@ -44,9 +47,16 @@ import org.opendc.sdk.model.scheduler.VGpuFilterSpec
 import org.opendc.sdk.model.scheduler.VGpuWeigherSpec
 import org.opendc.simulator.compute.scheduler.ComputeScheduler
 import org.opendc.simulator.compute.scheduler.FilterScheduler
+import org.opendc.simulator.compute.scheduler.criticality.CriticalPathCriticality
+import org.opendc.simulator.compute.scheduler.criticality.DescendantCountCriticality
+import org.opendc.simulator.compute.scheduler.criticality.ScoreCriticality
+import org.opendc.simulator.compute.scheduler.criticality.TaskCriticality
 import org.opendc.simulator.compute.scheduler.filters.ComputeFilter
 import org.opendc.simulator.compute.scheduler.timeshift.CarbonTimeshifter
+import java.nio.file.Files
+import java.nio.file.Path
 import java.time.InstantSource
+import java.util.SplittableRandom
 import java.util.random.RandomGenerator
 import kotlin.coroutines.CoroutineContext
 import org.opendc.sdk.model.scheduler.TaskStopperSpec as SdkTaskStopper
@@ -60,9 +70,11 @@ import org.opendc.simulator.compute.scheduler.filters.VCpuFilter as EngineVCpuFi
 import org.opendc.simulator.compute.scheduler.filters.VGpuFilter as EngineVGpuFilter
 import org.opendc.simulator.compute.scheduler.timeshift.TaskStopper as EngineTaskStopper
 import org.opendc.simulator.compute.scheduler.weights.CoreRamWeigher as EngineCoreRamWeigher
+import org.opendc.simulator.compute.scheduler.weights.CriticalityWeigher as EngineCriticalityWeigher
 import org.opendc.simulator.compute.scheduler.weights.HostWeigher as EngineHostWeigher
 import org.opendc.simulator.compute.scheduler.weights.InstanceCountWeigher as EngineInstanceCountWeigher
 import org.opendc.simulator.compute.scheduler.weights.RamWeigher as EngineRamWeigher
+import org.opendc.simulator.compute.scheduler.weights.RandomWeigher as EngineRandomWeigher
 import org.opendc.simulator.compute.scheduler.weights.VCpuCapacityWeigher as EngineVCpuCapacityWeigher
 import org.opendc.simulator.compute.scheduler.weights.VCpuWeigher as EngineVCpuWeigher
 import org.opendc.simulator.compute.scheduler.weights.VGpuWeigher as EngineVGpuWeigher
@@ -80,8 +92,44 @@ public fun AllocationPolicySpec.toScheduler(
     when (this) {
         is PrefabAllocationPolicySpec -> prefabName.policy.toScheduler(seeder, clock, numHosts)
         is FilterAllocationPolicySpec ->
-            FilterScheduler(filters.map { it.toEngine() }, weighers.map { it.toEngine() }, numHosts, timeshift?.toEngine(clock))
+            FilterScheduler(
+                filters.map { it.toEngine() },
+                weighers.map { it.toEngine(seeder) },
+                numHosts,
+                timeshift?.toEngine(clock),
+                taskOrder?.let { criticalityOf(it.source, it.scoresPath) },
+            )
     }
+
+/**
+ * The engine [TaskCriticality] for [source]. Scores are read from the CSV file at [scoresPath], which has a header
+ * line and the columns `task_id,score`.
+ */
+internal fun criticalityOf(
+    source: CriticalitySourceSpec,
+    scoresPath: String?,
+): TaskCriticality =
+    when (source) {
+        CriticalitySourceSpec.DESCENDANTS -> DescendantCountCriticality()
+        CriticalitySourceSpec.CRITICAL_PATH -> CriticalPathCriticality()
+        CriticalitySourceSpec.SCORES -> ScoreCriticality(readScores(Path.of(requireNotNull(scoresPath) { "scoresPath is required" })))
+    }
+
+/** Read the `task_id,score` CSV file at [path]. */
+private fun readScores(path: Path): Map<Int, Double> {
+    val scores = HashMap<Int, Double>()
+    Files.newBufferedReader(path).useLines { lines ->
+        for ((index, line) in lines.withIndex()) {
+            if (index == 0 || line.isBlank()) {
+                continue
+            }
+            val parts = line.split(',')
+            require(parts.size >= 2) { "Line ${index + 1} of $path does not have the columns task_id,score" }
+            scores[parts[0].trim().toInt()] = parts[1].trim().toDouble()
+        }
+    }
+    return scores
+}
 
 /** Builds the engine [EngineTaskStopper] carried by timeshift settings, or null when absent. */
 internal fun SdkTaskStopper?.toEngine(
@@ -105,8 +153,10 @@ private fun HostFilterSpec.toEngine(): EngineHostFilter =
         is VGpuFilterSpec -> EngineVGpuFilter(allocationRatio)
     }
 
-private fun HostWeigherSpec.toEngine(): EngineHostWeigher =
+private fun HostWeigherSpec.toEngine(seeder: RandomGenerator): EngineHostWeigher =
     when (this) {
+        is CriticalityWeigherSpec -> EngineCriticalityWeigher(criticalityOf(source, scoresPath), multiplier)
+        is RandomWeigherSpec -> EngineRandomWeigher(SplittableRandom(seeder.nextLong()), multiplier)
         is RamWeigherSpec -> EngineRamWeigher(multiplier)
         is CoreRamWeigherSpec -> EngineCoreRamWeigher(multiplier)
         is InstanceCountWeigherSpec -> EngineInstanceCountWeigher(multiplier)
