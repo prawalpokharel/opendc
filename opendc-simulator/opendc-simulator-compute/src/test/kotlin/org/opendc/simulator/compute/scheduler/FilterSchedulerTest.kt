@@ -52,6 +52,7 @@ import org.opendc.simulator.compute.scheduler.filters.VCpuFilter
 import org.opendc.simulator.compute.scheduler.filters.VGpuCapacityFilter
 import org.opendc.simulator.compute.scheduler.filters.VGpuFilter
 import org.opendc.simulator.compute.scheduler.weights.CoreRamWeigher
+import org.opendc.simulator.compute.scheduler.weights.CriticalityWeigher
 import org.opendc.simulator.compute.scheduler.weights.HostWeigher
 import org.opendc.simulator.compute.scheduler.weights.InstanceCountWeigher
 import org.opendc.simulator.compute.scheduler.weights.RamWeigher
@@ -557,6 +558,49 @@ internal class FilterSchedulerTest {
         every { req.isCancelled } returns false
 
         assertEquals(hostA, scheduler.select(mutableListOf(req).iterator()).host)
+    }
+
+    @Test
+    fun testCriticalityWeigher() {
+        val scheduler =
+            FilterScheduler(
+                filters = emptyList(),
+                weighers = listOf(CriticalityWeigher(ScoreCriticality(mapOf(1 to 5.0, 2 to 1.0, 3 to 2.0)))),
+            )
+
+        val critical = mockk<SimTask>()
+        every { critical.id } returns 1
+        val small = mockk<SimTask>()
+        every { small.id } returns 2
+        val medium = mockk<SimTask>()
+        every { medium.id } returns 3
+
+        // Host A runs criticality 5, host B runs 1 + 2 = 3, so the default multiplier of -1 prefers B
+        val hostA = mockk<SimHost>()
+        every { hostA.state } returns HostState.UP
+        every { hostA.model } returns HostModel(4 * 2600.0, 4, 2048)
+        every { hostA.availableMemory } returns DataSize.ofMiB(1024)
+        every { hostA.availableCpuCores } returns 4
+        every { hostA.isEmpty() } returns false
+        every { hostA.getInstances() } returns setOf(critical)
+
+        val hostB = mockk<SimHost>()
+        every { hostB.state } returns HostState.UP
+        every { hostB.model } returns HostModel(4 * 2600.0, 4, 2048)
+        every { hostB.availableMemory } returns DataSize.ofMiB(1024)
+        every { hostB.availableCpuCores } returns 4
+        every { hostB.isEmpty() } returns false
+        every { hostB.getInstances() } returns setOf(small, medium)
+
+        scheduler.addHost(hostA.withIds())
+        scheduler.addHost(hostB.withIds())
+
+        val req = mockk<SchedulingRequest>()
+        every { req.task.cpuCoreCount } returns 2
+        every { req.task.memorySize } returns DataSize.ofMiB(1024)
+        every { req.isCancelled } returns false
+
+        assertEquals(hostB, scheduler.select(mutableListOf(req).iterator()).host)
     }
 
     @Test

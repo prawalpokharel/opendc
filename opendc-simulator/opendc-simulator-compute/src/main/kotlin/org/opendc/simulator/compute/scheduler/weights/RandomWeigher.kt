@@ -20,22 +20,23 @@
  * SOFTWARE.
  */
 
-package org.opendc.sdk.model.scheduler
+package org.opendc.simulator.compute.scheduler.weights
 
-import kotlinx.serialization.Serializable
-import org.opendc.sdk.model.validation.Validatable
-import org.opendc.sdk.model.validation.ValidationIssue
+import org.opendc.simulator.compute.infrastructure.SimHost
+import java.util.random.RandomGenerator
 
 /**
- * Places the waiting tasks from the highest to the lowest priority, instead of first in, first out. Tasks with the same
- * priority, and tasks without one (priority 0), keep their order of arrival.
+ * A [HostWeigher] that gives each host a new random weight every time it is ranked, which spreads tasks over the hosts
+ * at random. Useful as a baseline when comparing weighers.
  *
- * @property scoresPath The CSV file with the priority of each task: a header line and the columns `task_id,score`.
+ * @param random The source of the weights.
+ * @param multiplier The weight multiplier.
  */
-@Serializable
-public data class TaskOrderSpec(
-    public val scoresPath: String,
-) : Validatable {
-    override fun validate(): List<ValidationIssue> =
-        if (scoresPath.isBlank()) listOf(ValidationIssue("scoresPath", "must not be blank")) else emptyList()
+public class RandomWeigher(
+    private val random: RandomGenerator,
+    override val multiplier: Double = 1.0,
+) : HostWeigher {
+    override fun getWeight(host: SimHost): Double = random.nextDouble()
+
+    override fun toString(): String = "RandomWeigher"
 }
