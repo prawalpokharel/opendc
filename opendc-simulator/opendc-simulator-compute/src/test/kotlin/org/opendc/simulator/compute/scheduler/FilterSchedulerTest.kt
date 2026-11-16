@@ -40,6 +40,7 @@ import org.opendc.simulator.compute.models.HostState
 import org.opendc.simulator.compute.models.MachineModel
 import org.opendc.simulator.compute.models.MemoryUnit
 import org.opendc.simulator.compute.power.PowerModel
+import org.opendc.simulator.compute.scheduler.criticality.ScoreCriticality
 import org.opendc.simulator.compute.scheduler.filters.ComputeFilter
 import org.opendc.simulator.compute.scheduler.filters.DifferentHostFilter
 import org.opendc.simulator.compute.scheduler.filters.HostFilter
@@ -556,6 +557,15 @@ internal class FilterSchedulerTest {
         every { req.isCancelled } returns false
 
         assertEquals(hostA, scheduler.select(mutableListOf(req).iterator()).host)
+    }
+
+    @Test
+    fun testTaskPriority() {
+        val priority = ScoreCriticality(mapOf(1 to 1.0))
+        val scheduler = FilterScheduler(filters = emptyList(), weighers = emptyList(), taskPriority = priority)
+
+        assertEquals(priority, scheduler.taskPriority)
+        assertEquals(null, FilterScheduler(filters = emptyList(), weighers = emptyList()).taskPriority)
     }
 
     @Test
